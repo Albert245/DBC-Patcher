@@ -104,9 +104,11 @@ class DBCParser:
         for sig in sorted(message.signals, key=lambda s: (s.start, s.length, s.name)):
             value_table = sig.choices or {}
             multiplex = None
-            if sig.is_multiplexer:
+            is_multiplexer = getattr(sig, "is_multiplexer", False)
+            multiplexer_ids = getattr(sig, "multiplexer_ids", None)
+            if is_multiplexer:
                 multiplex = "MUX"
-            elif sig.multiplexer_ids:
+            elif multiplexer_ids:
                 multiplex = "SUB"
             signals.append(
                 DBCSignal(
@@ -123,7 +125,7 @@ class DBCParser:
                     comment=sig.comment,
                     value_table={str(k): str(v) for k, v in value_table.items()},
                     multiplex=multiplex,
-                    multiplexer_ids=sig.multiplexer_ids if sig.multiplexer_ids else None,
+                    multiplexer_ids=multiplexer_ids if multiplexer_ids else None,
                 )
             )
         return signals
@@ -147,6 +149,7 @@ class DBCParser:
         """Replace cantools signals with values from dataclasses."""
 
         def create_signal(sig: DBCSignal) -> Signal:
+            multiplexer_ids = sig.multiplexer_ids if sig.multiplexer_ids else None
             return Signal(
                 name=sig.name,
                 start=sig.start_bit,
@@ -161,7 +164,7 @@ class DBCParser:
                 comment=sig.comment,
                 choices=sig.value_table or None,
                 is_multiplexer=sig.multiplex == "MUX",
-                multiplexer_ids=sig.multiplexer_ids,
+                multiplexer_ids=multiplexer_ids,
             )
 
         ct_message.signals.clear()
