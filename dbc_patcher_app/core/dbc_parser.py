@@ -8,11 +8,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
+import inspect
 import datetime
 
 import cantools
 from cantools.database import Database, Message, Signal
+
+try:
+    from cantools.database.conversion import LinearConversion
+except Exception:  # pragma: no cover - fallback for older cantools
+    LinearConversion = None
 
 
 @dataclass
@@ -101,8 +107,23 @@ class DBCParser:
 
     def _normalize_signals(self, message: Message) -> List[DBCSignal]:
         signals: List[DBCSignal] = []
+
+        def extract_conversion_attribute(obj: object, attr: str, default: Any) -> Any:
+            return getattr(obj, attr, default) if obj is not None else default
+
         for sig in sorted(message.signals, key=lambda s: (s.start, s.length, s.name)):
-            value_table = sig.choices or {}
+            conversion = getattr(sig, "conversion", None)
+            scale = getattr(sig, "scale", None)
+            offset = getattr(sig, "offset", None)
+            value_table = getattr(sig, "choices", None) or {}
+
+            if conversion is not None:
+                scale = extract_conversion_attribute(conversion, "scale", scale)
+                offset = extract_conversion_attribute(conversion, "offset", offset)
+                conv_choices = extract_conversion_attribute(conversion, "choices", None) or {}
+                if conv_choices:
+                    value_table = conv_choices
+
             multiplex = None
             is_multiplexer = getattr(sig, "is_multiplexer", False)
             multiplexer_ids = getattr(sig, "multiplexer_ids", None)
@@ -110,6 +131,7 @@ class DBCParser:
                 multiplex = "MUX"
             elif multiplexer_ids:
                 multiplex = "SUB"
+
             signals.append(
                 DBCSignal(
                     name=sig.name,
@@ -117,12 +139,12 @@ class DBCParser:
                     length=sig.length,
                     byte_order="motorola" if sig.byte_order == "big_endian" else "intel",
                     is_signed=sig.is_signed,
-                    scale=sig.scale or 1.0,
-                    offset=sig.offset or 0.0,
-                    minimum=sig.minimum,
-                    maximum=sig.maximum,
-                    unit=sig.unit,
-                    comment=sig.comment,
+                    scale=scale if scale is not None else 1.0,
+                    offset=offset if offset is not None else 0.0,
+                    minimum=getattr(sig, "minimum", None),
+                    maximum=getattr(sig, "maximum", None),
+                    unit=getattr(sig, "unit", None),
+                    comment=getattr(sig, "comment", None),
                     value_table={str(k): str(v) for k, v in value_table.items()},
                     multiplex=multiplex,
                     multiplexer_ids=multiplexer_ids if multiplexer_ids else None,
@@ -148,24 +170,68 @@ class DBCParser:
     def _update_signals(self, ct_message: Message, signals: List[DBCSignal]) -> None:
         """Replace cantools signals with values from dataclasses."""
 
+        def build_conversion(sig: DBCSignal):
+            if LinearConversion:
+                try:
+                    return LinearConversion(
+                        scale=sig.scale,
+                        offset=sig.offset,
+                        is_float=False,
+                        choices=sig.value_table or None,
+                    )
+                except Exception:
+                    pass
+
+            class SimpleConversion:
+                def __init__(self, scale: float, offset: float, is_float: bool = False, choices=None):
+                    self.scale = scale
+                    self.offset = offset
+                    self.is_float = is_float
+                    self.choices = choices
+
+            return SimpleConversion(sig.scale, sig.offset, False, sig.value_table or None)
+
         def create_signal(sig: DBCSignal) -> Signal:
             multiplexer_ids = sig.multiplexer_ids if sig.multiplexer_ids else None
-            return Signal(
+            parameters = inspect.signature(Signal).parameters
+            supports_scale = "scale" in parameters
+            supports_conversion = "conversion" in parameters
+
+            kwargs = dict(
                 name=sig.name,
                 start=sig.start_bit,
                 length=sig.length,
                 byte_order="big_endian" if sig.byte_order == "motorola" else "little_endian",
                 is_signed=sig.is_signed,
-                scale=sig.scale,
-                offset=sig.offset,
-                minimum=sig.minimum,
-                maximum=sig.maximum,
-                unit=sig.unit,
-                comment=sig.comment,
-                choices=sig.value_table or None,
-                is_multiplexer=sig.multiplex == "MUX",
-                multiplexer_ids=multiplexer_ids,
             )
+
+            if supports_scale:
+                kwargs.update(
+                    scale=sig.scale,
+                    offset=sig.offset,
+                    minimum=sig.minimum,
+                    maximum=sig.maximum,
+                    unit=sig.unit,
+                    comment=sig.comment,
+                    choices=sig.value_table or None,
+                )
+            elif supports_conversion:
+                kwargs.update(
+                    conversion=build_conversion(sig),
+                    minimum=sig.minimum,
+                    maximum=sig.maximum,
+                    unit=sig.unit,
+                    comment=sig.comment,
+                )
+                if "choices" in parameters:
+                    kwargs["choices"] = sig.value_table or None
+
+            if "is_multiplexer" in parameters:
+                kwargs["is_multiplexer"] = sig.multiplex == "MUX"
+            if "multiplexer_ids" in parameters:
+                kwargs["multiplexer_ids"] = multiplexer_ids
+
+            return Signal(**kwargs)
 
         ct_message.signals.clear()
         for sig in signals:
