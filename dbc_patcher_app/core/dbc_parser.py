@@ -80,7 +80,7 @@ class DBCParser:
 
         for msg in sorted(db.messages, key=lambda m: m.frame_id):
             signals = self._normalize_signals(msg)
-            attributes = {k: str(v) for k, v in (msg.attributes or {}).items()}
+            attributes = self._extract_message_attributes(msg)
             messages[msg.frame_id] = DBCMessage(
                 message_id=msg.frame_id,
                 name=msg.name,
@@ -140,7 +140,7 @@ class DBCParser:
             ct_message.length = msg_data.length
             ct_message.comment = msg_data.comment
             ct_message.cycle_time = msg_data.cycle_time
-            ct_message.attributes = msg_data.attributes
+            self._update_message_attributes(ct_message, msg_data.attributes)
             self._update_signals(ct_message, msg_data.signals)
 
     def _update_signals(self, ct_message: Message, signals: List[DBCSignal]) -> None:
@@ -167,4 +167,49 @@ class DBCParser:
         ct_message.signals.clear()
         for sig in signals:
             ct_message.signals.append(create_signal(sig))
+
+    def _extract_message_attributes(self, msg: Message) -> Dict[str, str]:
+        """Fetch message attributes defensively across cantools versions."""
+
+        def get_attributes_from_specifics(specifics: object) -> Dict[str, object]:
+            if specifics is None:
+                return {}
+            if hasattr(specifics, "attributes"):
+                return getattr(specifics, "attributes") or {}
+            if hasattr(specifics, "attribute_values"):
+                return getattr(specifics, "attribute_values") or {}
+            return {}
+
+        raw_attrs: Dict[str, object]
+        if hasattr(msg, "attributes"):
+            raw_attrs = getattr(msg, "attributes") or {}
+        elif hasattr(msg, "dbc_specifics"):
+            raw_attrs = get_attributes_from_specifics(getattr(msg, "dbc_specifics"))
+        elif hasattr(msg, "_dbc_specifics"):
+            raw_attrs = get_attributes_from_specifics(getattr(msg, "_dbc_specifics"))
+        else:
+            raw_attrs = {}
+
+        return {str(k): str(v) for k, v in raw_attrs.items()}
+
+    def _update_message_attributes(self, ct_message: Message, attributes: Dict[str, str]) -> None:
+        """Update attributes on a cantools Message, handling API differences."""
+
+        if hasattr(ct_message, "attributes"):
+            ct_message.attributes = attributes
+            return
+
+        specifics = None
+        if hasattr(ct_message, "dbc_specifics"):
+            specifics = getattr(ct_message, "dbc_specifics")
+        elif hasattr(ct_message, "_dbc_specifics"):
+            specifics = getattr(ct_message, "_dbc_specifics")
+
+        if specifics is None:
+            return
+
+        if hasattr(specifics, "attributes"):
+            setattr(specifics, "attributes", attributes)
+        elif hasattr(specifics, "attribute_values"):
+            setattr(specifics, "attribute_values", attributes)
 
