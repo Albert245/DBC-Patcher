@@ -133,6 +133,23 @@ class PatchApplier:
         signal.name = str(new_name)
         return "applied", {"rule": rule}
 
+    def _handle_update_message_senders(self, model: DBCModel, rule: Dict[str, object]):
+        msg_hex, message = self._message_by_id(model, rule["message_id"])
+        if not message:
+            return "skipped", {"rule": rule, "reason": "message missing"}
+
+        changes = rule.get("changes", {})
+        change = changes.get("senders", {}) if isinstance(changes, dict) else {}
+        expected = change.get("from")
+        new_val = change.get("to")
+        current = message.senders
+
+        if expected is not None and current != expected:
+            return "conflict", {"rule": rule, "reason": f"expected {expected} but found {current}"}
+
+        message.senders = list(new_val or [])
+        return "applied", {"rule": rule}
+
     def _handle_add_message(self, model: DBCModel, rule: Dict[str, object]):
         msg_hex = rule.get("message_id")
         if not msg_hex:

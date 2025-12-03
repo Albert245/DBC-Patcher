@@ -84,6 +84,15 @@ class DiffEngine:
                 )
             )
 
+        if raw_msg.senders != clean_msg.senders:
+            rules.append(
+                DiffRule(
+                    op="update_message_senders",
+                    message_id=clean_msg.hex_id,
+                    changes={"senders": {"from": raw_msg.senders, "to": clean_msg.senders}},
+                )
+            )
+
         for name in raw_names & clean_names:
             rules.extend(
                 self._compare_signal(raw_msg, raw_signals[name], clean_signals[name])
@@ -119,6 +128,7 @@ class DiffEngine:
             "unit",
             "comment",
             "value_table",
+            "receivers",
         ]
 
         for field in fields:

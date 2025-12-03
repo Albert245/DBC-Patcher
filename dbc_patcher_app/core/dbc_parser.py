@@ -39,6 +39,7 @@ class DBCSignal:
     value_table: Dict[str, str] = field(default_factory=dict)
     multiplex: Optional[str] = None
     multiplexer_ids: Optional[List[int]] = None
+    receivers: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -51,6 +52,7 @@ class DBCMessage:
     cycle_time: Optional[int]
     comment: Optional[str]
     attributes: Dict[str, str] = field(default_factory=dict)
+    senders: List[str] = field(default_factory=list)
     signals: List[DBCSignal] = field(default_factory=list)
 
     @property
@@ -94,6 +96,7 @@ class DBCParser:
                 cycle_time=msg.cycle_time,
                 comment=msg.comment,
                 attributes=attributes,
+                senders=list(getattr(msg, "senders", []) or []),
                 signals=signals,
             )
 
@@ -116,6 +119,7 @@ class DBCParser:
             scale = getattr(sig, "scale", None)
             offset = getattr(sig, "offset", None)
             value_table = getattr(sig, "choices", None) or {}
+            receivers = sorted(getattr(sig, "receivers", []) or [])
 
             if conversion is not None:
                 scale = extract_conversion_attribute(conversion, "scale", scale)
@@ -148,6 +152,7 @@ class DBCParser:
                     value_table={str(k): str(v) for k, v in value_table.items()},
                     multiplex=multiplex,
                     multiplexer_ids=multiplexer_ids if multiplexer_ids else None,
+                    receivers=receivers,
                 )
             )
         return signals
@@ -164,6 +169,8 @@ class DBCParser:
             ct_message.length = msg_data.length
             ct_message.comment = msg_data.comment
             ct_message.cycle_time = msg_data.cycle_time
+            if hasattr(ct_message, "senders"):
+                ct_message.senders = list(msg_data.senders)
             self._update_message_attributes(ct_message, msg_data.attributes)
             self._update_signals(ct_message, msg_data.signals)
 
@@ -196,6 +203,7 @@ class DBCParser:
             parameters = inspect.signature(Signal).parameters
             supports_scale = "scale" in parameters
             supports_conversion = "conversion" in parameters
+            supports_receivers = "receivers" in parameters
 
             kwargs = dict(
                 name=sig.name,
@@ -225,6 +233,9 @@ class DBCParser:
                 )
                 if "choices" in parameters:
                     kwargs["choices"] = sig.value_table or None
+
+            if supports_receivers:
+                kwargs["receivers"] = list(sig.receivers)
 
             if "is_multiplexer" in parameters:
                 kwargs["is_multiplexer"] = sig.multiplex == "MUX"
