@@ -342,14 +342,33 @@ def _build_signal_from_dict(data: Dict[str, object]) -> Signal:
         except Exception:
             multiplexer_ids = None
 
+    scale = float(data.get("scale", 1.0))
+    offset = float(data.get("offset", 0.0))
+    is_float = bool(data.get("is_float", False))
+    conversion = data.get("conversion") or data.get("decimal")
+    if conversion is not None:
+        scale = float(getattr(conversion, "scale", scale))
+        offset = float(getattr(conversion, "offset", offset))
+        is_float = bool(getattr(conversion, "is_float", is_float))
+        conv_choices = getattr(conversion, "choices", None)
+        if conv_choices:
+            normalized_choices: Dict[object, str] = {}
+            for raw_key, raw_value in conv_choices.items():
+                try:
+                    norm_key: object = int(raw_key)
+                except Exception:
+                    norm_key = str(raw_key)
+                normalized_choices[norm_key] = str(raw_value)
+            choices = normalized_choices
+
     signal = Signal(
         name=str(data.get("name", "")),
         start=int(data.get("start_bit", 0)),
         length=int(data.get("length", 1)),
         byte_order=byte_order,
         is_signed=bool(data.get("is_signed", False)),
-        scale=float(data.get("scale", 1.0)),
-        offset=float(data.get("offset", 0.0)),
+        scale=scale,
+        offset=offset,
         minimum=float(minimum) if minimum is not None else None,
         maximum=float(maximum) if maximum is not None else None,
         unit=data.get("unit"),
@@ -359,6 +378,7 @@ def _build_signal_from_dict(data: Dict[str, object]) -> Signal:
         is_multiplexer=is_multiplexer,
         multiplexer_ids=multiplexer_ids,
         multiplexer_signal=data.get("multiplexer_signal"),
+        is_float=is_float,
     )
 
     return signal
