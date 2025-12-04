@@ -4,8 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
-from cantools.database.can import Message as CTMessage
-
 from .dbc_parser import DBCModel, DBCMessage, DBCSignal, DBCParser
 from .ref_db import ReferenceDB
 
@@ -161,23 +159,13 @@ class PatchApplier:
             message_id=msg_id,
             name=f"MSG_{msg_hex}",
             length=8,
+            is_extended_frame=False,
             cycle_time=None,
             comment=None,
             attributes={},
             signals=[],
         )
         model.messages[msg_id] = new_message
-        ct_message = CTMessage(
-            frame_id=msg_id,
-            name=new_message.name,
-            length=new_message.length,
-            senders=[],
-            signals=[],
-            comment=new_message.comment,
-            cycle_time=new_message.cycle_time,
-            is_extended_frame=False,
-        )
-        model.db.messages.append(ct_message)
         return "applied", {"rule": rule}
 
     def _handle_remove_message(self, model: DBCModel, rule: Dict[str, object]):
@@ -188,6 +176,5 @@ class PatchApplier:
         if msg_id not in model.messages:
             return "skipped", {"rule": rule, "reason": "not found"}
         del model.messages[msg_id]
-        model.db.messages = [m for m in model.db.messages if m.frame_id != msg_id]
         return "applied", {"rule": rule}
 
