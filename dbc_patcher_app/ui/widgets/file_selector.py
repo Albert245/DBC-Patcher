@@ -52,3 +52,6 @@ class FileSelector(QtWidgets.QWidget):
     def exists(self) -> bool:
         return self.path().exists()
 
+    def is_set(self) -> bool:
+        return bool(self.path_edit.text().strip())
+
