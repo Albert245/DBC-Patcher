@@ -329,6 +329,19 @@ def _build_signal_from_dict(data: Dict[str, object]) -> Signal:
             key = str(raw_key)
         choices[key] = str(raw_value)
 
+    minimum = data.get("minimum")
+    maximum = data.get("maximum")
+    multiplex_field = data.get("multiplex")
+    is_multiplexer = multiplex_field == "MUX"
+    multiplexer_ids_raw = data.get("multiplexer_ids") or []
+    multiplexer_ids = [int(mid) for mid in multiplexer_ids_raw] if multiplexer_ids_raw else None
+
+    if not is_multiplexer and multiplex_field not in (None, "", "MUX") and not multiplexer_ids:
+        try:
+            multiplexer_ids = [int(multiplex_field)]
+        except Exception:
+            multiplexer_ids = None
+
     signal = Signal(
         name=str(data.get("name", "")),
         start=int(data.get("start_bit", 0)),
@@ -337,14 +350,15 @@ def _build_signal_from_dict(data: Dict[str, object]) -> Signal:
         is_signed=bool(data.get("is_signed", False)),
         scale=float(data.get("scale", 1.0)),
         offset=float(data.get("offset", 0.0)),
-        minimum=data.get("minimum"),
-        maximum=data.get("maximum"),
+        minimum=float(minimum) if minimum is not None else None,
+        maximum=float(maximum) if maximum is not None else None,
         unit=data.get("unit"),
         choices=choices or None,
         comment=data.get("comment"),
         receivers=receivers,
-        is_multiplexer=data.get("multiplex") == "MUX",
-        multiplexer_ids=data.get("multiplexer_ids"),
+        is_multiplexer=is_multiplexer,
+        multiplexer_ids=multiplexer_ids,
+        multiplexer_signal=data.get("multiplexer_signal"),
     )
 
     return signal
