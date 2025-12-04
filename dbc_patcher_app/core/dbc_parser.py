@@ -43,9 +43,9 @@ class DBCMessage:
     message_id: int
     name: str
     length: int
+    cycle_time: Optional[int] = None
+    comment: Optional[str] = None
     is_extended_frame: bool = False
-    cycle_time: Optional[int]
-    comment: Optional[str]
     attributes: Dict[str, str] = field(default_factory=dict)
     senders: List[str] = field(default_factory=list)
     signals: List[DBCSignal] = field(default_factory=list)
