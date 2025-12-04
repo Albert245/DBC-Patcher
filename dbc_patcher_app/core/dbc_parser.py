@@ -8,11 +8,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 import datetime
 
 import cantools
 from cantools.database import Database, Message
+from cantools.database.can import Node, Signal
 
 
 @dataclass
@@ -26,10 +27,10 @@ class DBCSignal:
     is_signed: bool
     scale: float
     offset: float
-    minimum: Optional[float]
-    maximum: Optional[float]
-    unit: Optional[str]
-    comment: Optional[str]
+    minimum: Optional[float] = None
+    maximum: Optional[float] = None
+    unit: Optional[str] = None
+    comment: Optional[str] = None
     value_table: Dict[str, str] = field(default_factory=dict)
     multiplex: Optional[str] = None
     multiplexer_ids: Optional[List[int]] = None
@@ -120,11 +121,14 @@ class DBCParser:
             source_path=source_path,
         )
 
-    def save_dbc(self, model: DBCModel, path: Path) -> None:
+    def save_dbc(self, model: DBCModel, path: Path, validate: bool = True) -> None:
         """Persist a DBCModel to disk using cantools serialization."""
 
-        with Path(path).open("w", encoding="utf-8") as f:
-            f.write(model.db.as_dbc_string())
+        db_dict = self.model_to_dict(model)
+        dbc_text = generate_dbc_text_from_dict(db_dict, validate=validate)
+
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(dbc_text, encoding="utf-8")
 
     def _normalize_signals(self, message: Message) -> List[DBCSignal]:
         signals: List[DBCSignal] = []
@@ -179,9 +183,9 @@ class DBCParser:
         """Rebuild the underlying cantools Database from dataclass content."""
 
         db_dict = self.model_to_dict(model)
-        dbc_text = generate_dbc_text_from_dict(db_dict)
-        new_db = cantools.database.load_string(dbc_text)
-        refreshed = self._build_model_from_db(new_db, model.source_path)
+        new_db = build_database_from_dict(db_dict)
+        refreshed_db = cantools.database.load_string(new_db.as_dbc_string())
+        refreshed = self._build_model_from_db(refreshed_db, model.source_path)
 
         model.db = refreshed.db
         model.messages = refreshed.messages
@@ -304,157 +308,94 @@ def export_db_to_dict(database: Database) -> Dict[str, object]:
     return parser.model_to_dict(model)
 
 
-def generate_dbc_text_from_dict(db_dict: Dict[str, object]) -> str:
+def generate_dbc_text_from_dict(db_dict: Dict[str, object], validate: bool = True) -> str:
     """Construct a DBC string from a dictionary representation."""
 
-    def quote(value: object) -> str:
-        escaped = str(value).replace('"', '\\"')
-        return f'"{escaped}"'
+    db = build_database_from_dict(db_dict)
+    dbc_text = db.as_dbc_string()
+    if validate:
+        cantools.database.load_string(dbc_text)
+    return dbc_text
 
-    def format_attr_value(value: object) -> str:
-        if value is None:
-            return quote("")
-        if isinstance(value, (int, float)):
-            return str(value)
+
+def _build_signal_from_dict(data: Dict[str, object]) -> Signal:
+    receivers = list(data.get("receivers", []) or [])
+    byte_order = "big_endian" if data.get("byte_order") == "motorola" else "little_endian"
+    choices: Dict[object, str] = {}
+    for raw_key, raw_value in (data.get("value_table") or {}).items():
         try:
-            float_val = float(value)
-            if str(value).strip() == str(int(float_val)):
-                return str(int(float_val))
-            return str(float_val)
+            key: object = int(raw_key)
         except Exception:
-            return quote(value)
+            key = str(raw_key)
+        choices[key] = str(raw_value)
 
-    version = db_dict.get("version", "")
-    nodes = db_dict.get("nodes", []) or []
-    messages = db_dict.get("messages", []) or []
+    minimum = data.get("minimum")
+    maximum = data.get("maximum")
+    multiplex_field = data.get("multiplex")
+    is_multiplexer = multiplex_field == "MUX"
+    multiplexer_ids_raw = data.get("multiplexer_ids") or []
+    multiplexer_ids = [int(mid) for mid in multiplexer_ids_raw] if multiplexer_ids_raw else None
 
-    ns_defaults = [
-        "NS_DESC_",
-        "CM_",
-        "BA_DEF_",
-        "BA_",
-        "VAL_",
-        "CAT_DEF_",
-        "CAT_",
-        "FILTER",
-        "BA_DEF_DEF_",
-        "EV_DATA_",
-        "ENVVAR_DATA_",
-        "SGTYPE_",
-        "SGTYPE_VAL_",
-        "BA_DEF_SGTYPE_",
-        "BA_SGTYPE_",
-        "SIG_TYPE_REF_",
-        "VAL_TABLE_",
-        "SIG_GROUP_",
-        "SIG_VALTYPE_",
-        "SIGTYPE_VALTYPE_",
-        "BO_TX_BU_",
-        "BA_DEF_REL_",
-        "BA_REL_",
-        "BA_DEF_DEF_REL_",
-        "BU_SG_REL_",
-        "BU_EV_REL_",
-        "BU_BO_REL_",
-        "SG_MUL_VAL_",
-    ]
+    if not is_multiplexer and multiplex_field not in (None, "", "MUX") and not multiplexer_ids:
+        try:
+            multiplexer_ids = [int(multiplex_field)]
+        except Exception:
+            multiplexer_ids = None
 
-    lines: List[str] = []
-    lines.append(f"VERSION {quote(version)}")
-    lines.append("")
-    lines.append("NS_ :")
-    for token in ns_defaults:
-        lines.append(f"    {token}")
+    signal = Signal(
+        name=str(data.get("name", "")),
+        start=int(data.get("start_bit", 0)),
+        length=int(data.get("length", 1)),
+        byte_order=byte_order,
+        is_signed=bool(data.get("is_signed", False)),
+        scale=float(data.get("scale", 1.0)),
+        offset=float(data.get("offset", 0.0)),
+        minimum=float(minimum) if minimum is not None else None,
+        maximum=float(maximum) if maximum is not None else None,
+        unit=data.get("unit"),
+        choices=choices or None,
+        comment=data.get("comment"),
+        receivers=receivers,
+        is_multiplexer=is_multiplexer,
+        multiplexer_ids=multiplexer_ids,
+        multiplexer_signal=data.get("multiplexer_signal"),
+    )
 
-    lines.append("")
-    lines.append("BS_:")
-    lines.append("")
-    lines.append("BU_: " + " ".join(nodes))
+    return signal
 
-    comment_lines: List[str] = []
-    attribute_lines: List[str] = []
-    value_table_lines: List[str] = []
 
-    for message in sorted(messages, key=lambda m: m.get("frame_id", 0)):
-        frame_id = int(message.get("frame_id", 0))
-        name = message.get("name", f"MSG_{frame_id}")
-        length = int(message.get("length", 8))
-        senders = message.get("senders", []) or []
-        transmitter = senders[0] if senders else "Vector__XXX"
+def _build_message_from_dict(data: Dict[str, object]) -> Message:
+    signals = [_build_signal_from_dict(sig) for sig in data.get("signals", []) or []]
+    senders = list(data.get("senders", []) or [])
 
-        lines.append("")
-        lines.append(f"BO_ {frame_id} {name}: {length} {transmitter}")
+    message = Message(
+        frame_id=int(data.get("frame_id", 0)),
+        name=str(data.get("name", f"MSG_{data.get('frame_id', 0)}")),
+        length=int(data.get("length", 8)),
+        signals=signals,
+        senders=senders or None,
+        cycle_time=data.get("cycle_time"),
+        is_extended_frame=bool(data.get("is_extended_frame", False)),
+        comment=data.get("comment"),
+    )
 
-        cycle_time = message.get("cycle_time")
-        if cycle_time is not None:
-            attribute_lines.append(
-                f"BA_ \"GenMsgCycleTime\" BO_ {frame_id} {format_attr_value(cycle_time)};"
-            )
+    attributes = data.get("attributes") or {}
+    if attributes:
+        setattr(message, "attributes", {str(k): v for k, v in attributes.items()})
 
-        msg_comment = message.get("comment")
-        if msg_comment:
-            comment_lines.append(f"CM_ BO_ {frame_id} {quote(msg_comment)};")
+    return message
 
-        attributes = message.get("attributes", {}) or {}
-        for attr_name, attr_val in attributes.items():
-            attribute_lines.append(
-                f"BA_ {quote(attr_name)} BO_ {frame_id} {format_attr_value(attr_val)};"
-            )
 
-        for signal in message.get("signals", []) or []:
-            sig_name = signal.get("name", "")
-            start_bit = int(signal.get("start_bit", 0))
-            length_bits = int(signal.get("length", 1))
-            byte_order = signal.get("byte_order", "motorola")
-            byte_flag = 0 if byte_order == "motorola" else 1
-            sign_flag = "-" if signal.get("is_signed") else "+"
-            scale = signal.get("scale", 1)
-            offset = signal.get("offset", 0)
-            minimum = signal.get("minimum")
-            maximum = signal.get("maximum")
-            unit = signal.get("unit") or ""
-            receivers = signal.get("receivers", []) or ["Vector__XXX"]
-            multiplex = signal.get("multiplex")
-            multiplexer_ids = signal.get("multiplexer_ids") or []
+def build_database_from_dict(db_dict: Dict[str, object]) -> Database:
+    nodes = [Node(name=str(node)) for node in db_dict.get("nodes", []) or []]
+    messages = [_build_message_from_dict(msg) for msg in db_dict.get("messages", []) or []]
+    version = str(db_dict.get("version", "")) if db_dict.get("version") is not None else ""
 
-            multiplex_tag = ""
-            if multiplex == "MUX":
-                multiplex_tag = " M"
-            elif multiplex == "SUB" and multiplexer_ids:
-                multiplex_tag = f" m{int(multiplexer_ids[0])}"
-
-            min_val = 0 if minimum is None else minimum
-            max_val = 0 if maximum is None else maximum
-
-            signal_line = (
-                f" SG_ {sig_name}{multiplex_tag} : {start_bit}|{length_bits}"
-                f"@{byte_flag}{sign_flag} ({scale},{offset}) [{min_val}|{max_val}]"
-                f" {quote(unit)} {' '.join(receivers)}"
-            )
-            lines.append(signal_line)
-
-            sig_comment = signal.get("comment")
-            if sig_comment:
-                comment_lines.append(
-                    f"CM_ SG_ {frame_id} {sig_name} {quote(sig_comment)};"
-                )
-
-            value_table = signal.get("value_table", {}) or {}
-            if value_table:
-                entries = " ".join(
-                    f"{int(k) if str(k).isdigit() else k} {quote(v)}"
-                    for k, v in sorted(value_table.items(), key=lambda item: str(item[0]))
-                )
-                value_table_lines.append(f"VAL_ {frame_id} {sig_name} {entries} ;")
-
-    lines.append("")
-    lines.extend(comment_lines)
-    if comment_lines:
-        lines.append("")
-    lines.extend(attribute_lines)
-    if attribute_lines:
-        lines.append("")
-    lines.extend(value_table_lines)
-
-    return "\n".join(lines).strip() + "\n"
+    database = cantools.database.Database(
+        messages=messages,
+        nodes=nodes,
+        version=version,
+        attributes=None,
+    )
+    return database
 

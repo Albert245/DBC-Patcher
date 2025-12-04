@@ -5,15 +5,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from .dbc_parser import DBCModel, DBCMessage, DBCSignal
+from .dbc_parser import DBCModel, DBCMessage, DBCSignal, DBCParser
 
 
 @dataclass
 class DiffRule:
     op: str
     message_id: str
+    message: Optional[Dict[str, object]] = None
     signal_match: Optional[Dict[str, int]] = None
     signal_name: Optional[str] = None
+    signal: Optional[Dict[str, object]] = None
     changes: Optional[Dict[str, Dict[str, object]]] = None
     from_ref: bool = False
 
@@ -23,6 +25,10 @@ class DiffRule:
             data["signal_match"] = self.signal_match
         if self.signal_name:
             data["signal_name"] = self.signal_name
+        if self.message:
+            data["message"] = self.message
+        if self.signal:
+            data["signal"] = self.signal
         if self.changes:
             data["changes"] = self.changes
         if self.from_ref:
@@ -32,6 +38,9 @@ class DiffRule:
 
 class DiffEngine:
     """Compute domain-specific patch JSON from two DBC models."""
+
+    def __init__(self) -> None:
+        self.parser = DBCParser()
 
     def generate_patch(self, raw: DBCModel, cleaned: DBCModel) -> Dict[str, object]:
         rules: List[DiffRule] = []
@@ -43,7 +52,13 @@ class DiffEngine:
         clean_ids = set(clean_messages.keys())
 
         for msg_id in sorted(clean_ids - raw_ids):
-            rules.append(DiffRule(op="add_message", message_id=hex(msg_id)))
+            rules.append(
+                DiffRule(
+                    op="add_message",
+                    message_id=hex(msg_id),
+                    message=self.parser._message_to_dict(clean_messages[msg_id]),
+                )
+            )
 
         for msg_id in sorted(raw_ids - clean_ids):
             rules.append(DiffRule(op="remove_message", message_id=hex(msg_id)))
@@ -57,6 +72,11 @@ class DiffEngine:
             "rules": [r.to_dict() for r in rules],
         }
 
+    def build_patch(self, raw: DBCModel, cleaned: DBCModel) -> Dict[str, object]:
+        """Alias for generate_patch for clarity in direct workflows."""
+
+        return self.generate_patch(raw, cleaned)
+
     def _compare_message(self, raw_msg: DBCMessage, clean_msg: DBCMessage) -> List[DiffRule]:
         rules: List[DiffRule] = []
 
@@ -67,11 +87,13 @@ class DiffEngine:
         clean_names = set(clean_signals.keys())
 
         for sig in clean_names - raw_names:
+            clean_signal = clean_signals[sig]
             rules.append(
                 DiffRule(
-                    op="add_signal_if_missing",
+                    op="add_signal",
                     message_id=clean_msg.hex_id,
                     signal_name=sig,
+                    signal=self.parser._signal_to_dict(clean_signal),
                 )
             )
 

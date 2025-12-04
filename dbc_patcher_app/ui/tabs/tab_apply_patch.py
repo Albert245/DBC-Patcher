@@ -86,7 +86,9 @@ class ApplyPatchTab(QtWidgets.QWidget):
         self._fill_table(self.skipped_table, self.result.skipped, ["reason"])
         self._fill_table(self.conflicts_table, self.result.conflicts, ["reason"])
 
-    def _fill_table(self, table: QtWidgets.QTableWidget, data, extra_fields):
+    def _fill_table(
+        self, table: QtWidgets.QTableWidget, data: list[dict], extra_fields: list[str]
+    ) -> None:
         table.setRowCount(len(data))
         for row, item in enumerate(data):
             rule = item.get("rule", {})
@@ -104,6 +106,7 @@ class ApplyPatchTab(QtWidgets.QWidget):
         )
         if not path:
             return
-        self.parser.save_dbc(self.model, Path(path))
+        target_model = self.result.new_model if self.result else self.model
+        self.parser.save_dbc(target_model, Path(path))
         QtWidgets.QMessageBox.information(self, "Saved", f"Cleaned DBC saved to {path}")
 

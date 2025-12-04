@@ -11,6 +11,7 @@ from ..core.ref_db import ReferenceDB
 from ..core.history import HistoryLogger
 from .tabs.tab_generate_patch import GeneratePatchTab
 from .tabs.tab_apply_patch import ApplyPatchTab
+from .tabs.tab_direct_patch import DirectPatchTab
 from .tabs.tab_reference import ReferenceTab
 from .tabs.tab_history import HistoryTab
 from .tabs.tab_settings import SettingsTab
@@ -41,6 +42,12 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs.addTab(
             ApplyPatchTab(parser=self.parser, ref_db=self.ref_db, history=self.history),
             "Apply Patch",
+        )
+        tabs.addTab(
+            DirectPatchTab(
+                parser=self.parser, ref_db=self.ref_db, history=self.history
+            ),
+            "3-File Patch (Direct Apply)",
         )
         tabs.addTab(ReferenceTab(ref_db=self.ref_db), "Reference")
         tabs.addTab(HistoryTab(history=self.history), "History")
